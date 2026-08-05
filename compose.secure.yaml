@@ -1,0 +1,21 @@
+services:
+  nats:
+    command: ["-c", "/etc/nats/nats-server.conf"]
+    environment:
+      FREEFLOW_NATS_USER: ${FREEFLOW_NATS_USER:?Defina FREEFLOW_NATS_USER}
+      FREEFLOW_NATS_PASSWORD: ${FREEFLOW_NATS_PASSWORD:?Defina FREEFLOW_NATS_PASSWORD}
+    volumes:
+      - ./config/nats/nats-server.conf:/etc/nats/nats-server.conf:ro
+      - ./secrets/tls/server.crt:/run/freeflow-tls/server.crt:ro
+      - ./secrets/tls/server.key:/run/freeflow-tls/server.key:ro
+      - ./secrets/tls/ca.crt:/run/freeflow-tls/ca.crt:ro
+
+  minio:
+    command: ["server", "/data", "--console-address", ":9001", "--certs-dir", "/certs"]
+    environment:
+      MINIO_ROOT_USER: ${FREEFLOW_MINIO_ACCESS_KEY:?Defina FREEFLOW_MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${FREEFLOW_MINIO_SECRET_KEY:?Defina FREEFLOW_MINIO_SECRET_KEY}
+    volumes:
+      - ./secrets/tls/server.crt:/certs/public.crt:ro
+      - ./secrets/tls/server.key:/certs/private.key:ro
+      - ./secrets/tls/ca.crt:/certs/CAs/ca.crt:ro

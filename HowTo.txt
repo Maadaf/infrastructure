@@ -1,0 +1,6 @@
+=== Para enviar alterações ===
+git status
+git add .
+git commit -m "Descrição das alterações"
+git push
+
