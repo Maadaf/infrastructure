@@ -22,7 +22,7 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
-    networks: [freeflow]
+    networks: [default]
     restart: unless-stopped
 
   minio:
@@ -41,7 +41,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    networks: [freeflow]
+    networks: [default]
     restart: unless-stopped
 
   mock-central-api:
@@ -52,7 +52,7 @@ services:
       RUST_LOG: ${RUST_LOG:-info}
     ports:
       - "8090:8090"
-    networks: [freeflow]
+    networks: [default]
     restart: unless-stopped
 
   vehicle-tracker:
@@ -90,7 +90,7 @@ services:
       timeout: 3s
       retries: 12
       start_period: 10s
-    networks: [freeflow]
+    networks: [default]
     restart: unless-stopped
 
   edge-uploader:
@@ -129,7 +129,7 @@ services:
       timeout: 3s
       retries: 12
       start_period: 10s
-    networks: [freeflow]
+    networks: [default]
     restart: unless-stopped
 
   simulator:
@@ -156,7 +156,7 @@ services:
         condition: service_healthy
       vehicle-tracker:
         condition: service_started
-    networks: [freeflow]
+    networks: [default]
     command: ["serve", "--host", "0.0.0.0", "--port", "8080"]
     restart: unless-stopped
 
@@ -168,6 +168,8 @@ volumes:
   lab-evidence:
   simulator-history:
 
+# Usa a rede já criada pelos outros Composes FreeFlow (label default).
 networks:
-  freeflow:
+  default:
     name: freeflow_default
+    external: true
