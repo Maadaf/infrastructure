@@ -1,0 +1,9 @@
+schema_version: "1.0"
+scenario_id: lab-e2e-smoke
+vehicle_count: 1
+interval_seconds: 0.5
+jitter_seconds: 0
+speed_min_kmh: 90
+speed_max_kmh: 90
+lanes: [1]
+vehicle_classes: [light]
