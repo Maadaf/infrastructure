@@ -4,7 +4,8 @@
 #   docker compose -f compose.lab.yaml up -d --build
 #   .\lab\smoke.ps1
 #
-# Caminho feliz sem hardware: o simulador publica os 4 eventos; camera-gateway fica de fora.
+# Caminho feliz sem hardware: o simulador publica os 4 eventos; camera-gateway fica de fora
+# (não está neste ficheiro; se estiver a correr como órfão do compose principal, pare-o).
 
 name: freeflow
 
@@ -148,6 +149,7 @@ services:
       - "8080:8080"
     volumes:
       - ./lab/scenario-lab.yaml:/app/config/scenario-lab.yaml:ro
+      - ./lab/gantry-lab.yaml:/app/config/gantry.yaml:ro
       - simulator-history:/app/runtime
     depends_on:
       nats:
