@@ -1,0 +1,22 @@
+# Overlay demo quase-produção: auth na API do simulador + central-api.
+# Aplicar ao stack CENTRAL (onde vive o simulador):
+#
+#   Copy-Item .env.demo.auth.example .env.demo.auth
+#   # editar tokens
+#   docker compose -f compose.central.yaml -f compose.demo.yaml --env-file .env.demo.auth up -d --build
+#   docker compose -f compose.lab.yaml --env-file .env.demo.auth up -d --build
+#   .\lab\smoke.ps1 -Demo
+#
+# O lab/full lê CENTRAL_AUTH_TOKEN do env-file para EU_CLOUD_TOKEN.
+
+services:
+  simulator:
+    environment:
+      FREEFLOW_AUTH_ENABLED: "true"
+      FREEFLOW_VIEWER_TOKEN: ${FREEFLOW_VIEWER_TOKEN:?Defina FREEFLOW_VIEWER_TOKEN}
+      FREEFLOW_OPERATOR_TOKEN: ${FREEFLOW_OPERATOR_TOKEN:?Defina FREEFLOW_OPERATOR_TOKEN}
+      FREEFLOW_ADMIN_TOKEN: ${FREEFLOW_ADMIN_TOKEN:?Defina FREEFLOW_ADMIN_TOKEN}
+
+  central-api:
+    environment:
+      CENTRAL_AUTH_TOKEN: ${CENTRAL_AUTH_TOKEN:?Defina CENTRAL_AUTH_TOKEN}

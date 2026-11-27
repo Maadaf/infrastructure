@@ -1,0 +1,14 @@
+# Overlay legado — lab.yaml já aponta edge-uploader → central-api (sem mock).
+# Mantido para não partir comandos antigos:
+#   docker compose -f compose.lab.yaml -f compose.lab.central.yaml up -d --build
+#
+# Preferir só: docker compose -f compose.lab.yaml up -d --build
+# (com compose.central.yaml já up, incl. simulador).
+
+services:
+  edge-uploader:
+    environment:
+      EU_CLOUD_BASE_URL: http://central-api:8090
+      EU_CLOUD_TOKEN: ${CENTRAL_AUTH_TOKEN:-}
+      EU_RETENTION_SECONDS: "0"
+      EU_CLEANUP_INTERVAL_SECONDS: "5"

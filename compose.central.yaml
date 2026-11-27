@@ -1,0 +1,137 @@
+# Serviço CENTRAL FreeFlow (outra máquina / stack separado do pórtico).
+# Rede própria freeflow_central + junta freeflow_default para o edge-uploader alcançar a API
+# e para o simulador (gémeo digital de lab) publicar no NATS/MinIO do pórtico.
+#
+#   docker network create freeflow_default
+#   docker network create freeflow_central
+#   docker compose -f compose.central.yaml up -d --build
+#
+# Portas host (lab no mesmo PC que o pórtico):
+#   simulator 8080 | central-api 8090 | postgres 5433 | minio 9010/9011 | ops-ui 8089
+#
+# O simulador precisa do stack edge (NATS + MinIO) na rede freeflow_default para publicar eventos.
+
+name: freeflow-central
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: freeflow
+      POSTGRES_PASSWORD: freeflow
+      POSTGRES_DB: freeflow_central
+    ports:
+      - "5433:5432"
+    volumes:
+      - central-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U freeflow -d freeflow_central"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    networks: [central]
+    restart: unless-stopped
+
+  central-minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${CENTRAL_MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${CENTRAL_MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9010:9000"
+      - "9011:9001"
+    volumes:
+      - central-minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [central]
+    restart: unless-stopped
+
+  # Rust Axum (central-api-rs). Fallback Python: context ../central-api + Dockerfile antigo.
+  central-api:
+    build:
+      context: ../central-api-rs
+      dockerfile: Dockerfile
+    environment:
+      CENTRAL_DATABASE_URL: postgresql://freeflow:freeflow@postgres:5432/freeflow_central
+      CENTRAL_MINIO_ENDPOINT: http://central-minio:9000
+      CENTRAL_MINIO_ACCESS_KEY: ${CENTRAL_MINIO_ACCESS_KEY:-minioadmin}
+      CENTRAL_MINIO_SECRET_KEY: ${CENTRAL_MINIO_SECRET_KEY:-minioadmin}
+      CENTRAL_MINIO_BUCKET: freeflow-central
+      CENTRAL_AUTH_TOKEN: ${CENTRAL_AUTH_TOKEN:-}
+      # Lab: espelha s3:// do MinIO do pórtico (serviço "minio" em freeflow_default).
+      CENTRAL_MIRROR_S3_ENDPOINT: ${CENTRAL_MIRROR_S3_ENDPOINT:-http://minio:9000}
+      CENTRAL_MIRROR_S3_ACCESS_KEY: ${CENTRAL_MIRROR_S3_ACCESS_KEY:-minioadmin}
+      CENTRAL_MIRROR_S3_SECRET_KEY: ${CENTRAL_MIRROR_S3_SECRET_KEY:-minioadmin}
+      CENTRAL_SEED_GANTRIES: "true"
+      CENTRAL_TWIN_BASE_URL: http://simulator:8080
+      RUST_LOG: ${CENTRAL_RUST_LOG:-info}
+    ports:
+      - "8090:8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      central-minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "central-api", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    networks: [central, edge]
+    restart: unless-stopped
+
+  ops-ui:
+    build:
+      context: ../ops-ui
+      dockerfile: Dockerfile
+      args:
+        VITE_CENTRAL_API_URL: ""
+    ports:
+      - "8089:80"
+    depends_on:
+      central-api:
+        condition: service_healthy
+    networks: [central]
+    restart: unless-stopped
+
+  # Gémeo digital de lab — vive no stack central; publica no NATS/MinIO do pórtico (rede edge).
+  simulator:
+    build:
+      context: ..
+      dockerfile: simulador/Dockerfile
+    environment:
+      FREEFLOW_NATS_URL: nats://nats:4222
+      FREEFLOW_EVIDENCE_ENDPOINT: http://minio:9000
+      FREEFLOW_EVIDENCE_ACCESS_KEY: ${FREEFLOW_MINIO_ACCESS_KEY:-minioadmin}
+      FREEFLOW_EVIDENCE_SECRET_KEY: ${FREEFLOW_MINIO_SECRET_KEY:-minioadmin}
+      FREEFLOW_HISTORY_DB: /app/runtime/freeflow-history.db
+      FREEFLOW_AUTH_ENABLED: "false"
+      FREEFLOW_STORAGE_MAINTENANCE_ENABLED: "false"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./lab/scenario-lab.yaml:/app/config/scenario-lab.yaml:ro
+      - ./lab/gantry-lab.yaml:/app/config/gantry.yaml:ro
+      - simulator-history:/app/runtime
+    networks: [central, edge]
+    command: ["serve", "--host", "0.0.0.0", "--port", "8080"]
+    restart: unless-stopped
+
+volumes:
+  central-pg-data:
+  central-minio-data:
+  simulator-history:
+
+networks:
+  central:
+    name: freeflow_central
+    external: true
+  edge:
+    name: freeflow_default
+    external: true

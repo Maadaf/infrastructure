@@ -1,11 +1,16 @@
-# Lab E2E: NATS + MinIO + simulador → vehicle-tracker → edge-uploader → mock-central.
-# Correr a partir desta pasta (infrastructure/). Rede única: freeflow_default.
+# Lab E2E (pórtico): NATS + MinIO + vehicle-tracker + edge-uploader → central-api.
+# Simulador (gémeo digital) vive em compose.central.yaml — não neste stack.
+# Correr a partir desta pasta (infrastructure/). Rede: freeflow_default.
 #
+#   docker network create freeflow_default
+#   docker network create freeflow_central
+#   docker compose -f compose.central.yaml up -d --build
 #   docker compose -f compose.lab.yaml up -d --build
-#   .\lab\smoke.ps1
+#   .\lab\smoke-central.ps1
 #
-# Caminho feliz sem hardware: o simulador publica os 4 eventos; camera-gateway fica de fora
-# (não está neste ficheiro; se estiver a correr como órfão do compose principal, pare-o).
+# Caminho feliz sem hardware: o simulador (central) publica os 5 eventos (incl. wim).
+# Gateways de equipamento ficam de fora; para stack completo ver compose.full.yaml.
+# Se gateways órfãos (camera/lidar/radar/rfid/wim) estiverem up, o smoke para-os.
 
 name: freeflow
 
@@ -45,21 +50,10 @@ services:
     networks: [default]
     restart: unless-stopped
 
-  mock-central-api:
-    build:
-      context: ../mock-central-api
-      dockerfile: Dockerfile
-    environment:
-      RUST_LOG: ${RUST_LOG:-info}
-    ports:
-      - "8090:8090"
-    networks: [default]
-    restart: unless-stopped
-
   vehicle-tracker:
     build:
-      context: ../vehicle-tracker
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: vehicle-tracker/Dockerfile
     environment:
       VT_SERVICE_NAME: vehicle-tracker
       VT_LOG_LEVEL: ${VT_LOG_LEVEL:-INFO}
@@ -96,8 +90,8 @@ services:
 
   edge-uploader:
     build:
-      context: ../edge-uploader
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: edge-uploader/Dockerfile
       args:
         VERSION: lab
         REVISION: lab
@@ -107,10 +101,14 @@ services:
       EU_NATS_URL: nats://nats:4222
       EU_NATS_STREAM: FREEFLOW_PASSAGES
       EU_NATS_DURABLE: edge-uploader-lab-v1
-      EU_CLOUD_BASE_URL: http://mock-central-api:8090
+      EU_CLOUD_BASE_URL: http://central-api:8090
+      EU_CLOUD_TOKEN: ${CENTRAL_AUTH_TOKEN:-}
       EU_EVIDENCE_ROOT: /evidence
       EU_UPLOAD_EXPIRED: "true"
+      EU_RETENTION_SECONDS: "0"
+      EU_CLEANUP_INTERVAL_SECONDS: "5"
       EU_MAX_CONCURRENCY: "2"
+      EU_MIN_FREE_DISK_RATIO: "0.20"
       RUST_LOG: ${RUST_LOG:-info}
     ports:
       - "8082:8082"
@@ -120,8 +118,6 @@ services:
     depends_on:
       nats:
         condition: service_healthy
-      mock-central-api:
-        condition: service_started
       vehicle-tracker:
         condition: service_started
     healthcheck:
@@ -133,42 +129,12 @@ services:
     networks: [default]
     restart: unless-stopped
 
-  simulator:
-    build:
-      context: ../simulador
-      dockerfile: Dockerfile
-    environment:
-      FREEFLOW_NATS_URL: nats://nats:4222
-      FREEFLOW_EVIDENCE_ENDPOINT: http://minio:9000
-      FREEFLOW_EVIDENCE_ACCESS_KEY: ${FREEFLOW_MINIO_ACCESS_KEY:-minioadmin}
-      FREEFLOW_EVIDENCE_SECRET_KEY: ${FREEFLOW_MINIO_SECRET_KEY:-minioadmin}
-      FREEFLOW_HISTORY_DB: /app/runtime/freeflow-history.db
-      FREEFLOW_AUTH_ENABLED: "false"
-      FREEFLOW_STORAGE_MAINTENANCE_ENABLED: "false"
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./lab/scenario-lab.yaml:/app/config/scenario-lab.yaml:ro
-      - ./lab/gantry-lab.yaml:/app/config/gantry.yaml:ro
-      - simulator-history:/app/runtime
-    depends_on:
-      nats:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      vehicle-tracker:
-        condition: service_started
-    networks: [default]
-    command: ["serve", "--host", "0.0.0.0", "--port", "8080"]
-    restart: unless-stopped
-
 volumes:
   nats-data:
   minio-data:
   tracker-data:
   uploader-data:
   lab-evidence:
-  simulator-history:
 
 # Usa a rede já criada pelos outros Composes FreeFlow (label default).
 networks:

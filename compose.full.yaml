@@ -1,0 +1,340 @@
+# Stack completo FreeFlow no PC — pórtico/edge (sem Git).
+# Contexto: pasta infrastructure/. Rede: freeflow_default (external).
+#
+# Serviços base (sempre): NATS, MinIO, VT, edge-uploader → central-api,
+#   camera / lidar / radar / rfid / wim (DRIVER=simulator — sem equipamento).
+# Simulador de tráfego E2E: compose.central.yaml (stack central).
+# Hardware real: CG_DRIVER=hikvision LG_DRIVER=ouster (recreate camera/lidar).
+# Poll central: --env-file compose.full.central-poll.env (recreate 5 gateways).
+#
+#   docker network create freeflow_default
+#   docker network create freeflow_central
+#   docker compose -f compose.central.yaml up -d --build
+#   docker compose -f compose.full.yaml up -d --build
+#   docker compose -f compose.full.yaml down
+
+name: freeflow
+
+x-gateway-security: &gateway-security
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+  networks: [default]
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    command: ["--jetstream", "--store_dir=/data", "--http_port=8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8222/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    networks: [default]
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${FREEFLOW_MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${FREEFLOW_MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [default]
+    restart: unless-stopped
+
+  vehicle-tracker:
+    build:
+      context: ..
+      dockerfile: vehicle-tracker/Dockerfile
+    environment:
+      VT_SERVICE_NAME: vehicle-tracker
+      VT_LOG_LEVEL: ${VT_LOG_LEVEL:-INFO}
+      VT_HEALTH_PORT: "8080"
+      VT_NATS_URL: nats://nats:4222
+      VT_SOURCE_STREAM: FREEFLOW_EVENTS
+      VT_SOURCE_SUBJECT: freeflow.events.>
+      VT_RESULT_STREAM: FREEFLOW_PASSAGES
+      VT_RESULT_SUBJECT_PREFIX: freeflow.passages
+      VT_PUBLISH_RESULTS_ENABLED: "true"
+      VT_DATABASE_PATH: /data/vehicle-tracker.db
+      VT_CORRELATION_WINDOW_SECONDS: "8"
+      VT_PASSAGE_FINALIZATION_SECONDS: "3"
+      VT_CORRELATION_SPEED_TOLERANCE_KMH: "20"
+      VT_CORRELATION_MIN_CONFIDENCE: "0.5"
+      VT_CORRELATION_AMBIGUITY_MARGIN: "0.1"
+      VT_MAX_EVENT_AGE_SECONDS: "2592000"
+      VT_MAX_FUTURE_SKEW_SECONDS: "300"
+    ports:
+      - "8081:8080"
+    volumes:
+      - tracker-data:/data
+    depends_on:
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "vehicle-tracker", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    networks: [default]
+    restart: unless-stopped
+
+  edge-uploader:
+    build:
+      context: ..
+      dockerfile: edge-uploader/Dockerfile
+      args:
+        VERSION: full
+        REVISION: full
+    environment:
+      EU_DATABASE_PATH: /data/edge-uploader.db
+      EU_BIND_ADDRESS: 0.0.0.0:8082
+      EU_NATS_URL: nats://nats:4222
+      EU_NATS_STREAM: FREEFLOW_PASSAGES
+      EU_NATS_DURABLE: edge-uploader-full-v1
+      EU_CLOUD_BASE_URL: http://central-api:8090
+      EU_CLOUD_TOKEN: ${CENTRAL_AUTH_TOKEN:-}
+      EU_EVIDENCE_ROOT: /evidence
+      EU_UPLOAD_EXPIRED: "true"
+      EU_RETENTION_SECONDS: "0"
+      EU_CLEANUP_INTERVAL_SECONDS: "5"
+      EU_MAX_CONCURRENCY: "2"
+      EU_MIN_FREE_DISK_RATIO: "0.20"
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "8082:8082"
+    volumes:
+      - uploader-data:/data
+      - full-evidence:/evidence
+    depends_on:
+      nats:
+        condition: service_healthy
+      vehicle-tracker:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "edge-uploader", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    networks: [default]
+    restart: unless-stopped
+
+  # Rust (rust-gateways). Fallback Python: dockerfile device-integration/radar-gateway/Dockerfile
+  radar-gateway:
+    <<: *gateway-security
+    build:
+      context: ..
+      dockerfile: device-integration/rust-gateways/Dockerfile.radar
+    environment:
+      RG_GANTRY_ID: ${RG_GANTRY_ID:-A1-KM10-N}
+      RG_SENSOR_ID: ${RG_SENSOR_ID:-radar-01}
+      RG_LANE: ${RG_LANE:-1}
+      RG_DRIVER: simulator
+      RG_NATS_URL: nats://nats:4222
+      RG_NATS_SUBJECT: freeflow.events.A1-KM10-N.radar.vehicle_detected
+      RG_HEALTH_HOST: 0.0.0.0
+      RG_HEALTH_PORT: "8086"
+      RG_LOG_LEVEL: ${RG_LOG_LEVEL:-INFO}
+      RG_SIM_INTERVAL_SECONDS: ${RG_SIM_INTERVAL_SECONDS:-5.0}
+      RG_SIM_SPEED_KMH: ${RG_SIM_SPEED_KMH:-90.0}
+      RG_CENTRAL_URL: ${RG_CENTRAL_URL:-}
+      RG_CENTRAL_TOKEN: ${RG_CENTRAL_TOKEN:-}
+      RG_POLL_INTERVAL_SECONDS: ${RG_POLL_INTERVAL_SECONDS:-30}
+      RG_EQUIPMENT_ID: ${RG_EQUIPMENT_ID:-}
+    ports:
+      - "8086:8086"
+    depends_on:
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "radar-gateway", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # Rust (rust-gateways). Fallback Python: dockerfile device-integration/rfid-gateway/Dockerfile
+  rfid-gateway:
+    <<: *gateway-security
+    build:
+      context: ..
+      dockerfile: device-integration/rust-gateways/Dockerfile.rfid
+    environment:
+      TG_GANTRY_ID: ${TG_GANTRY_ID:-A1-KM10-N}
+      TG_SENSOR_ID: ${TG_SENSOR_ID:-antenna-01}
+      TG_LANE: ${TG_LANE:-1}
+      TG_DRIVER: simulator
+      TG_NATS_URL: nats://nats:4222
+      TG_NATS_SUBJECT: freeflow.events.A1-KM10-N.antenna.tag_read
+      TG_HEALTH_HOST: 0.0.0.0
+      TG_HEALTH_PORT: "8087"
+      TG_LOG_LEVEL: ${TG_LOG_LEVEL:-INFO}
+      TG_SIM_INTERVAL_SECONDS: ${TG_SIM_INTERVAL_SECONDS:-5.0}
+      TG_SIM_SPEED_KMH: ${TG_SIM_SPEED_KMH:-90.0}
+      TG_CENTRAL_URL: ${TG_CENTRAL_URL:-}
+      TG_CENTRAL_TOKEN: ${TG_CENTRAL_TOKEN:-}
+      TG_POLL_INTERVAL_SECONDS: ${TG_POLL_INTERVAL_SECONDS:-30}
+      TG_EQUIPMENT_ID: ${TG_EQUIPMENT_ID:-}
+    ports:
+      - "8087:8087"
+    depends_on:
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "rfid-gateway", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # Rust (rust-gateways). Fallback Python: device-integration/wim-gateway/Dockerfile
+  wim-gateway:
+    <<: *gateway-security
+    build:
+      context: ..
+      dockerfile: device-integration/rust-gateways/Dockerfile.wim
+    environment:
+      WG_GANTRY_ID: ${WG_GANTRY_ID:-A1-KM10-N}
+      WG_SENSOR_ID: ${WG_SENSOR_ID:-wim-01}
+      WG_LANE: ${WG_LANE:-1}
+      WG_DRIVER: simulator
+      WG_NATS_URL: nats://nats:4222
+      WG_NATS_SUBJECT: freeflow.events.A1-KM10-N.wim.axles_counted
+      WG_HEALTH_HOST: 0.0.0.0
+      WG_HEALTH_PORT: "8088"
+      WG_LOG_LEVEL: ${WG_LOG_LEVEL:-INFO}
+      WG_SIM_INTERVAL_SECONDS: ${WG_SIM_INTERVAL_SECONDS:-5.0}
+      WG_SIM_SPEED_KMH: ${WG_SIM_SPEED_KMH:-90.0}
+      WG_CENTRAL_URL: ${WG_CENTRAL_URL:-}
+      WG_CENTRAL_TOKEN: ${WG_CENTRAL_TOKEN:-}
+      WG_POLL_INTERVAL_SECONDS: ${WG_POLL_INTERVAL_SECONDS:-30}
+      WG_EQUIPMENT_ID: ${WG_EQUIPMENT_ID:-}
+    ports:
+      - "8088:8088"
+    depends_on:
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wim-gateway", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # Câmara Rust — lab default = simulator; hikvision ainda phantom no bin Rust.
+  # user 65532 = mesmo UID do edge-uploader (volume /evidence partilhado).
+  # Fallback Python: device-integration/camera-gateway/Dockerfile
+  camera-gateway:
+    <<: *gateway-security
+    user: "65532:65532"
+    build:
+      context: ..
+      dockerfile: device-integration/rust-gateways/Dockerfile.camera
+    environment:
+      CG_GANTRY_ID: ${CG_GANTRY_ID:-A1-KM10-N}
+      CG_SENSOR_ID: ${CG_SENSOR_ID:-camera-01}
+      CG_LANE: ${CG_LANE:-1}
+      CG_DRIVER: ${CG_DRIVER:-simulator}
+      CG_NATS_URL: nats://nats:4222
+      CG_NATS_SUBJECT: freeflow.events.A1-KM10-N.camera.plate_read
+      CG_HEALTH_HOST: 0.0.0.0
+      CG_HEALTH_PORT: "8084"
+      CG_LOG_LEVEL: ${CG_LOG_LEVEL:-INFO}
+      CG_SIM_INTERVAL_SECONDS: ${CG_SIM_INTERVAL_SECONDS:-5.0}
+      CG_SIM_SPEED_KMH: ${CG_SIM_SPEED_KMH:-90.0}
+      CG_HIKVISION_BASE_URL: ${CG_HIKVISION_BASE_URL:-http://192.0.2.10}
+      CG_HIKVISION_USERNAME: ${CG_HIKVISION_USERNAME:-admin}
+      CG_HIKVISION_PASSWORD: ${CG_HIKVISION_PASSWORD:-changeme}
+      CG_EVIDENCE_ROOT: /evidence
+      CG_EVIDENCE_URI_ROOT: file:///evidence
+      CG_CENTRAL_URL: ${CG_CENTRAL_URL:-}
+      CG_CENTRAL_TOKEN: ${CG_CENTRAL_TOKEN:-}
+      CG_POLL_INTERVAL_SECONDS: ${CG_POLL_INTERVAL_SECONDS:-30}
+      CG_EQUIPMENT_ID: ${CG_EQUIPMENT_ID:-}
+    ports:
+      - "8084:8084"
+    volumes:
+      - full-evidence:/evidence
+    depends_on:
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "camera-gateway", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # LiDAR Rust — lab default = simulator; ouster ainda phantom no bin Rust.
+  # Fallback Python: device-integration/lidar-gateway/Dockerfile
+  lidar-gateway:
+    <<: *gateway-security
+    build:
+      context: ..
+      dockerfile: device-integration/rust-gateways/Dockerfile.lidar
+    environment:
+      LG_GANTRY_ID: ${LG_GANTRY_ID:-A1-KM10-N}
+      LG_SENSOR_ID: ${LG_SENSOR_ID:-lidar-01}
+      LG_DRIVER: ${LG_DRIVER:-simulator}
+      LG_LANE: ${LG_LANE:-1}
+      LG_SIM_INTERVAL_SECONDS: ${LG_SIM_INTERVAL_SECONDS:-5.0}
+      LG_SIM_SPEED_KMH: ${LG_SIM_SPEED_KMH:-90.0}
+      LG_OUSTER_SOURCE: ${LG_OUSTER_SOURCE:-http://host.docker.internal}
+      LG_NATS_URL: nats://nats:4222
+      LG_NATS_SUBJECT: freeflow.events.A1-KM10-N.lidar.vehicle_profiled
+      LG_OUTBOX_PATH: /data/lidar-outbox.db
+      LG_HEALTH_HOST: 0.0.0.0
+      LG_HEALTH_PORT: "8085"
+      LG_LOG_LEVEL: ${LG_LOG_LEVEL:-INFO}
+      LG_CENTRAL_URL: ${LG_CENTRAL_URL:-}
+      LG_CENTRAL_TOKEN: ${LG_CENTRAL_TOKEN:-}
+      LG_POLL_INTERVAL_SECONDS: ${LG_POLL_INTERVAL_SECONDS:-30}
+      LG_EQUIPMENT_ID: ${LG_EQUIPMENT_ID:-}
+    ports:
+      - "8085:8085"
+    volumes:
+      - lidar-data:/data
+    depends_on:
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "lidar-gateway", "healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  nats-data:
+  minio-data:
+  tracker-data:
+  uploader-data:
+  full-evidence:
+  lidar-data:
+
+networks:
+  default:
+    name: freeflow_default
+    external: true
