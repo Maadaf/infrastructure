@@ -5,7 +5,8 @@ kilometre: 10.4
 direction: northbound
 lanes: 1
 sensors:
-  - {id: radar-l1, type: radar, lane: 1, position_m: 0.0, subject: freeflow.events.A1-KM10-N.radar, latency_ms: 8, detection_zone_before_m: 18, field_of_view_degrees: 35, detection_probability: 1.0}
-  - {id: lidar-l1, type: lidar, lane: 1, position_m: 4.0, subject: freeflow.events.A1-KM10-N.lidar, latency_ms: 12, detection_zone_before_m: 4, detection_zone_after_m: 1, field_of_view_degrees: 70, detection_probability: 1.0}
-  - {id: camera-l1, type: camera, lane: 1, position_m: 8.0, subject: freeflow.events.A1-KM10-N.camera, latency_ms: 35, detection_zone_before_m: 2, field_of_view_degrees: 28, detection_probability: 1.0}
-  - {id: antenna-l1, type: antenna, lane: 1, position_m: 11.0, subject: freeflow.events.A1-KM10-N.antenna, latency_ms: 15, detection_zone_before_m: 1, detection_zone_after_m: 1, field_of_view_degrees: 90, detection_probability: 1.0}
+  - {id: radar-l1, type: radar, lane: 1, position_m: 0.0, subject: freeflow.events.A1-KM10-N.radar.vehicle_detected, latency_ms: 8, detection_zone_before_m: 18, field_of_view_degrees: 35, detection_probability: 1.0}
+  - {id: wim-l1, type: wim, lane: 1, position_m: 2.0, subject: freeflow.events.A1-KM10-N.wim.axles_counted, latency_ms: 10, detection_zone_before_m: 1, detection_zone_after_m: 1, field_of_view_degrees: 90, detection_probability: 1.0}
+  - {id: lidar-l1, type: lidar, lane: 1, position_m: 4.0, subject: freeflow.events.A1-KM10-N.lidar.vehicle_profiled, latency_ms: 12, detection_zone_before_m: 4, detection_zone_after_m: 1, field_of_view_degrees: 70, detection_probability: 1.0}
+  - {id: camera-l1, type: camera, lane: 1, position_m: 8.0, subject: freeflow.events.A1-KM10-N.camera.plate_read, latency_ms: 35, detection_zone_before_m: 2, field_of_view_degrees: 28, detection_probability: 1.0}
+  - {id: antenna-l1, type: antenna, lane: 1, position_m: 11.0, subject: freeflow.events.A1-KM10-N.antenna.tag_read, latency_ms: 15, detection_zone_before_m: 1, detection_zone_after_m: 1, field_of_view_degrees: 90, detection_probability: 1.0}
